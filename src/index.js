@@ -33,7 +33,8 @@ async function start() {
 
     startPollingForMessages(channel, dbconn);
   } catch (err) {
-    console.error("start: Connection error:", err.message);
+    console.error("start: Connection error:", err);
+    return await start();
   }
 }
 
@@ -41,11 +42,12 @@ async function createConnection(config) {
   const conn = await amqp.connect(config);
 
   conn.on("error", function (err) {
-    console.error("Connection error:", err.message);
+    console.error("Connection error:", err);
   });
 
-  conn.on("close", function () {
-    console.error("Connection closed:", err.message);
+  conn.on("close", async function () {
+    console.error("Connection closed:", err);
+    return await createConnection(config);
   });
 
   return conn;
@@ -79,13 +81,23 @@ function startPollingForMessages(ch, dbconn) {
 
 async function onNewMessage(msg, dbconn) {
   const siteInfo = JSON.parse(msg.content.toString());
+  if (
+    siteInfo["url"] == null ||
+    siteInfo["url"].length == 0 ||
+    siteInfo["url"].length >= 255 ||
+    siteInfo["title"] == null ||
+    siteInfo["title"].length == 0 ||
+    siteInfo["title"].length >= 255
+  ) {
+    return;
+  }
 
   let [rows, fields] = await dbconn.execute(
     "INSERT INTO sites (title, url) VALUES (?, ?) " +
-      "ON DUPLICATE KEY UPDATE title = VALUES(title), url = VALUES(url)",
+      "ON DUPLICATE KEY UPDATE title = VALUES(title), url = VALUES(url), seen = VALUES(seen) + 1",
     [siteInfo["title"], siteInfo["url"]]
   );
-  console.log("[INSERT] -- "+siteInfo["title"]);
+  console.log("[INSERT] -- " + siteInfo["title"]);
   return rows;
 }
 
