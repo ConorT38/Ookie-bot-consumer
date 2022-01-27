@@ -1,19 +1,27 @@
 const amqp = require("amqplib");
 const mysql = require("mysql2/promise");
+require("dotenv").config();
 
 const queue = "sitesQueue";
 
 // Set your config here...
-let config = {
-  protocol: "amqp",
-  hostname: "192.168.0.22",
-  port: 5672,
-  username: "root",
-  password: "Ae27!6CdJc1_thEQ9",
-  locale: "en_US",
-  frameMax: 0,
-  heartbeat: 0,
-  vhost: "/",
+let amqpConfig = {
+  protocol: process.env.AMQP_PROTOCOL,
+  hostname: process.env.AMQP_HOST,
+  port: process.env.AMQP_PORT,
+  username: process.env.AMQP_USERNAME,
+  password: process.env.AMQP_PASSWORD,
+  locale: process.env.AMQP_LOCALE,
+  frameMax: process.env.AMQP_FRAME_MAX,
+  heartbeat: process.env.AMQP_HEARTBEAT,
+  vhost: process.env.AMQP_VHOST,
+};
+
+let dbConfig = {
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_DATABASE,
 };
 
 async function start() {
@@ -21,12 +29,7 @@ async function start() {
     const conn = await createConnection(config);
     console.log("Connected to AMQP server.");
 
-    const dbconn = await mysql.createConnection({
-      host: "192.168.0.21",
-      user: "root",
-      password: "raspberry",
-      database: "ookie",
-    });
+    const dbconn = await createDatabaseConnection();
 
     let channel = await conn.createChannel();
     await channel.assertQueue(queue, { durable: false });
@@ -38,6 +41,9 @@ async function start() {
   }
 }
 
+async function createDatabaseConnection() {
+  return await mysql.createConnection(dbConfig);
+}
 async function createConnection(config) {
   const conn = await amqp.connect(config);
 
@@ -92,13 +98,31 @@ async function onNewMessage(msg, dbconn) {
     return;
   }
 
-  let [rows, fields] = await dbconn.execute(
-    "INSERT INTO sites (title, url) VALUES (?, ?) " +
-      "ON DUPLICATE KEY UPDATE title = VALUES(title), url = VALUES(url), seen = VALUES(seen) + 1",
-    [siteInfo["title"], siteInfo["url"]]
-  );
-  console.log("[INSERT] -- " + siteInfo["title"]);
-  return rows;
+  await saveSiteInfo(siteInfo, dbconn);
+}
+
+async function saveStemmedWords(msgJson, dbconn) {
+  for (const word of msgJson["words"]) {
+    // stemmedWord = word.stem();
+    //
+  }
+}
+
+async function saveSiteInfo(msgJson, dbconn) {
+  try {
+    let [rows, fields] = await dbconn.execute(
+      "INSERT INTO sites (title, url) VALUES (?, ?) " +
+        "ON DUPLICATE KEY UPDATE title = VALUES(title), url = VALUES(url)",
+      [msgJson["title"], msgJson["url"]]
+    );
+    console.log("[INSERT] -- " + msgJson["title"]);
+    return rows;
+  } catch (err) {
+    console.log(err);
+    dbconn.close();
+    const dbconn = await createDatabaseConnection();
+    await onNewMessage(msg, dbconn);
+  }
 }
 
 start();
