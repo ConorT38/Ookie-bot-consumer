@@ -1,5 +1,6 @@
 const amqp = require("amqplib");
 const mysql = require("mysql2/promise");
+const natural = require("natural");
 require("dotenv").config();
 
 const queue = "sitesQueue";
@@ -26,7 +27,7 @@ let dbConfig = {
 
 async function start() {
   try {
-    const conn = await createConnection(config);
+    const conn = await createConnection(amqpConfig);
     console.log("Connected to AMQP server.");
 
     const dbconn = await createDatabaseConnection();
@@ -86,43 +87,78 @@ function startPollingForMessages(ch, dbconn) {
 }
 
 async function onNewMessage(msg, dbconn) {
-  const siteInfo = JSON.parse(msg.content.toString());
+  const msgJson = JSON.parse(msg.content.toString());
   if (
-    siteInfo["url"] == null ||
-    siteInfo["url"].length == 0 ||
-    siteInfo["url"].length >= 255 ||
-    siteInfo["title"] == null ||
-    siteInfo["title"].length == 0 ||
-    siteInfo["title"].length >= 255
+    msgJson["url"] == null ||
+    msgJson["url"].length == 0 ||
+    msgJson["url"].length >= 255 ||
+    msgJson["title"] == null ||
+    msgJson["title"].length == 0 ||
+    msgJson["title"].length >= 255
   ) {
     return;
   }
-
-  await saveSiteInfo(siteInfo, dbconn);
+  const siteId = await saveSiteInfo(msgJson, dbconn);
+  if (siteId == 0) {
+    return;
+  }
+  await saveStemmedWords(msgJson, siteId, dbconn);
 }
 
-async function saveStemmedWords(msgJson, dbconn) {
+async function saveStemmedWords(msgJson, siteId, dbconn) {
+  var seenWords = {};
   for (const word of msgJson["words"]) {
-    // stemmedWord = word.stem();
-    //
+    if (word.length < 1 || word in seenWords) {
+      continue;
+    }
+
+    const stemmedWord = doStemming(word);
+    try {
+      let [rows, fields] = await dbconn.execute(
+        "INSERT INTO stemmed_words (word, site_id) VALUES (?, ?)",
+        [stemmedWord, siteId]
+      );
+
+      seenWords[word] = true;
+      console.log("[INSERT][stemmed_words] -- " + stemmedWord);
+    } catch (err) {
+      console.log(err);
+      dbconn.close();
+      const dbconn = await createDatabaseConnection();
+      await onNewMessage(msg, dbconn);
+    }
+
+    // console.log(seenWords);
   }
 }
 
 async function saveSiteInfo(msgJson, dbconn) {
   try {
-    let [rows, fields] = await dbconn.execute(
+    await dbconn.execute(
       "INSERT INTO sites (title, url) VALUES (?, ?) " +
         "ON DUPLICATE KEY UPDATE title = VALUES(title), url = VALUES(url)",
       [msgJson["title"], msgJson["url"]]
     );
-    console.log("[INSERT] -- " + msgJson["title"]);
-    return rows;
+
+    let [rows, _] = await dbconn.execute("SELECT id FROM sites WHERE url=?", [
+      msgJson["url"],
+    ]);
+    if (rows.length > 0) {
+      return rows[0]["id"];
+    }
+    console.log("[INSERT][sites] -- " + msgJson["title"]);
   } catch (err) {
     console.log(err);
     dbconn.close();
     const dbconn = await createDatabaseConnection();
     await onNewMessage(msg, dbconn);
   }
+  return 0;
+}
+
+function doStemming(data) {
+  var nData = natural.PorterStemmer.stem(data);
+  return nData;
 }
 
 start();

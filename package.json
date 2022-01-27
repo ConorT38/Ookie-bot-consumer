@@ -11,6 +11,7 @@
   "dependencies": {
     "amqplib": "^0.8.0",
     "dotenv": "^14.3.2",
-    "mysql2": "^2.3.3"
+    "mysql2": "^2.3.3",
+    "natural": "^5.1.13"
   }
 }
